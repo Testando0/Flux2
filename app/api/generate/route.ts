@@ -3,43 +3,50 @@ import { NextResponse } from 'next/server';
 export async function POST(req: Request) {
   try {
     const { prompt } = await req.json();
+    const HF_TOKEN = process.env.HF_TOKEN;
 
-    if (!process.env.HF_TOKEN) {
-      return NextResponse.json({ error: "HF_TOKEN não configurado" }, { status: 500 });
+    if (!HF_TOKEN) {
+      return NextResponse.json({ error: "HF_TOKEN não configurado na Vercel" }, { status: 500 });
     }
 
-    // Chamada ao Space via Gradio API do Hugging Face
+    // Passo 1: Enviar o prompt para o Space
     const response = await fetch("https://multimodalart-flux-2-dev-turbo.hf.space/call/infer", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.HF_TOKEN}`,
+        "Authorization": `Bearer ${HF_TOKEN}`,
       },
       body: JSON.stringify({
         data: [prompt, 0, true, 512, 512, 3.5, 4],
       }),
     });
 
-    const { event_id } = await response.json();
+    const eventData = await response.json();
+    const eventId = eventData.event_id;
 
-    // Polling para obter o resultado final (o Turbo é tão rápido que um fetch costuma bastar)
-    const resultResponse = await fetch(`https://multimodalart-flux-2-dev-turbo.hf.space/call/infer/${event_id}`, {
-      headers: { "Authorization": `Bearer ${process.env.HF_TOKEN}` },
+    // Passo 2: Buscar o resultado final usando o Event ID
+    const resultResponse = await fetch(`https://multimodalart-flux-2-dev-turbo.hf.space/call/infer/${eventId}`, {
+      method: "GET",
+      headers: { "Authorization": `Bearer ${HF_TOKEN}` }
     });
 
-    const resultText = await resultResponse.text();
+    const text = await resultResponse.text();
     
-    // Extrair o URL da imagem da stream de eventos do Gradio
-    const lines = resultText.split('\n');
+    // O Gradio retorna uma stream de texto. Vamos buscar a linha que contém o JSON da imagem.
+    const lines = text.split('\n');
     const dataLine = lines.find(l => l.startsWith('data: '));
     
     if (dataLine) {
-      const data = JSON.parse(dataLine.slice(6));
-      return NextResponse.json({ imageUrl: data[0][0].image.url });
+      const json = JSON.parse(dataLine.replace('data: ', ''));
+      // O URL da imagem fica em json[0][0].image.url
+      const finalUrl = json[0][0].image.url;
+      return NextResponse.json({ url: finalUrl });
     }
 
-    return NextResponse.json({ error: "Falha ao gerar imagem" }, { status: 500 });
+    throw new Error("Não foi possível extrair o URL da imagem");
+
   } catch (error: any) {
+    console.error(error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
